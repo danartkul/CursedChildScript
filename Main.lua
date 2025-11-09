@@ -1,5 +1,5 @@
 --[[
- CURSED CHILD Jump Showdown - Venyx UI Edition with Aimbot
+ CURSED CHILD Jump Showdown - Venyx UI Edition with Aimbot & Favorite System
 ]]
 
 -- Защищенное получение сервисов
@@ -21,6 +21,7 @@ local RunService = GetProtectedService("RunService")
 local Workspace = GetProtectedService("Workspace")
 local UserInputService = GetProtectedService("UserInputService")
 local TweenService = GetProtectedService("TweenService")
+local Teams = GetProtectedService("Teams")
 
 if not Players then return end
 
@@ -53,7 +54,15 @@ local states = {
     npcEsp = false,
     teleportMode = false,
     fling = false,
-    aimbot = false
+    aimbot = false,
+    favoriteESP = false
+}
+
+local espSettings = {
+    showHP = true,
+    showTeam = true,
+    showTool = true,
+    showDistance = true
 }
 
 local settings = {
@@ -78,7 +87,362 @@ local itemList = {
     "Temporary-V", "Railgun", "Daybreak", "Helmet of Peace"
 }
 
--- Аимбот система
+-- СИСТЕМА ФАВОРИТА
+local FavoritePlayer = nil
+local currentFavoriteTarget = nil
+local currentFavoriteHighlight = nil
+local favoriteDistanceConnection = nil
+local favoriteInfoLabel = nil
+
+-- СИСТЕМА ИСКЛЮЧЕНИЙ ДЛЯ АИМБОТА
+local AimbotExceptions = {
+    Players = {}, -- Исключенные игроки по имени
+    Teams = {},   -- Исключенные команды по названию
+    Friends = false -- Исключать друзей
+}
+
+-- Функция для получения цвета команды
+local function GetTeamColor(playerObj)
+    if not playerObj or not playerObj.Team then 
+        return Color3.fromRGB(255, 255, 255) -- Белый по умолчанию
+    end
+    
+    local team = playerObj.Team
+    if team and team.TeamColor then
+        return team.TeamColor.Color
+    end
+    
+    return Color3.fromRGB(255, 255, 255)
+end
+
+-- Функция для получения названия команды
+local function GetTeamName(playerObj)
+    if not playerObj or not playerObj.Team then 
+        return "No Team"
+    end
+    
+    local team = playerObj.Team
+    if team then
+        return team.Name
+    end
+    
+    return "No Team"
+end
+
+-- Функция для получения предмета в руках
+local function GetToolInHand(playerObj)
+    if not playerObj or not playerObj.Character then
+        return "None"
+    end
+    
+    local character = playerObj.Character
+    local tool = character:FindFirstChildOfClass("Tool")
+    if tool then
+        return tool.Name
+    end
+    
+    -- Проверка Backpack
+    local backpack = playerObj:FindFirstChild("Backpack")
+    if backpack then
+        for _, item in ipairs(backpack:GetChildren()) do
+            if item:IsA("Tool") then
+                return item.Name
+            end
+        end
+    end
+    
+    return "None"
+end
+
+-- Функция для расчета расстояния
+local function GetDistanceFromPlayer(targetPosition)
+    local char = player.Character
+    if not char then return 0 end
+    
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return 0 end
+    
+    return math.floor((root.Position - targetPosition).Magnitude)
+end
+
+-- Функция проверки исключений для аимбота
+local function IsPlayerExcludedFromAimbot(targetPlayer)
+    if not targetPlayer then return true end
+    
+    -- Проверка исключения по имени игрока
+    if AimbotExceptions.Players[targetPlayer.Name] then
+        return true
+    end
+    
+    -- Проверка исключения по команде
+    if targetPlayer.Team then
+        local teamName = targetPlayer.Team.Name
+        if AimbotExceptions.Teams[teamName] then
+            return true
+        end
+    end
+    
+    -- Проверка исключения друзей
+    if AimbotExceptions.Friends then
+        local success, isFriend = pcall(function()
+            return targetPlayer:IsFriendsWith(player.UserId)
+        end)
+        if success and isFriend then
+            return true
+        end
+    end
+    
+    return false
+end
+
+-- Функция добавления игрока в исключения
+function AddPlayerToAimbotExceptions(playerName)
+    AimbotExceptions.Players[playerName] = true
+end
+
+-- Функция удаления игрока из исключений
+function RemovePlayerFromAimbotExceptions(playerName)
+    AimbotExceptions.Players[playerName] = nil
+end
+
+-- Функция добавления команды в исключения
+function AddTeamToAimbotExceptions(teamName)
+    AimbotExceptions.Teams[teamName] = true
+end
+
+-- Функция удаления команды из исключений
+function RemoveTeamFromAimbotExceptions(teamName)
+    AimbotExceptions.Teams[teamName] = nil
+end
+
+-- Функция очистки всех исключений
+function ClearAllAimbotExceptions()
+    AimbotExceptions.Players = {}
+    AimbotExceptions.Teams = {}
+    AimbotExceptions.Friends = false
+end
+
+-- Функция получения списка исключенных игроков
+function GetExcludedPlayersList()
+    local players = {}
+    for playerName, _ in pairs(AimbotExceptions.Players) do
+        table.insert(players, playerName)
+    end
+    return players
+end
+
+-- Функция получения списка исключенных команд
+function GetExcludedTeamsList()
+    local teams = {}
+    for teamName, _ in pairs(AimbotExceptions.Teams) do
+        table.insert(teams, teamName)
+    end
+    return teams
+end
+
+-- Функция очистки Favorite ESP
+local function ClearFavoriteESP()
+    if currentFavoriteHighlight then
+        currentFavoriteHighlight:Destroy()
+        currentFavoriteHighlight = nil
+    end
+    if favoriteDistanceConnection then
+        favoriteDistanceConnection:Disconnect()
+        favoriteDistanceConnection = nil
+    end
+    currentFavoriteTarget = nil
+end
+
+-- Функция создания Favorite ESP
+local function CreateFavoriteESP(targetPlayer)
+    ClearFavoriteESP()
+    
+    if not targetPlayer or not targetPlayer.Character then
+        if favoriteInfoLabel then
+            favoriteInfoLabel.Text = "⭐ FAVORITE: " .. targetPlayer.Name .. 
+                                   "\nStatus: No character" ..
+                                   "\nTeam: " .. GetTeamName(targetPlayer)
+        end
+        return
+    end
+    
+    local character = targetPlayer.Character
+    local teamColor = GetTeamColor(targetPlayer)
+    
+    -- Создаем подсветку
+    local highlight = Instance.new("Highlight")
+    highlight.Name = "Favorite_Highlight"
+    highlight.Parent = character
+    highlight.FillColor = Color3.fromRGB(255, 0, 255)
+    highlight.OutlineColor = Color3.fromRGB(255, 255, 255)
+    highlight.FillTransparency = 0.3
+    highlight.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop
+    
+    -- Сохраняем ссылки
+    currentFavoriteTarget = targetPlayer
+    currentFavoriteHighlight = highlight
+    
+    -- Функция для обновления информации
+    local function UpdateFavoriteInfo()
+        if not character or not character.Parent then
+            if favoriteInfoLabel then
+                favoriteInfoLabel.Text = "⭐ FAVORITE: " .. targetPlayer.Name .. 
+                                       "\nStatus: Dead" ..
+                                       "\nTeam: " .. GetTeamName(targetPlayer)
+            end
+            return
+        end
+        
+        -- Обновляем расстояние
+        local distance = "N/A"
+        if player.Character and player.Character:FindFirstChild("HumanoidRootPart") then
+            local root = player.Character.HumanoidRootPart
+            local targetPos = character:GetPivot().Position
+            distance = math.floor((root.Position - targetPos).Magnitude) .. "m"
+        end
+        
+        -- Обновляем HP
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        local hpText = "HP: N/A"
+        local status = "Alive"
+        
+        if humanoid then
+            local health = math.floor(humanoid.Health)
+            local maxHealth = math.floor(humanoid.MaxHealth)
+            hpText = "HP: " .. health .. "/" .. maxHealth
+            
+            if humanoid.Health <= 0 then
+                status = "Dead"
+            end
+        end
+        
+        -- Обновляем инструмент
+        local tool = character:FindFirstChildOfClass("Tool")
+        local toolText = tool and tool.Name or "None"
+        
+        -- Обновляем команду
+        local teamName = GetTeamName(targetPlayer)
+        
+        -- Обновляем информационную панель
+        if favoriteInfoLabel then
+            favoriteInfoLabel.Text = "⭐ FAVORITE: " .. targetPlayer.Name .. 
+                                   "\nStatus: " .. status ..
+                                   "\nTeam: " .. teamName ..
+                                   "\nDistance: " .. distance ..
+                                   "\n" .. hpText .. 
+                                   "\nTool: " .. toolText
+        end
+    end
+    
+    -- Обновляем информацию каждый кадр
+    favoriteDistanceConnection = RunService.Heartbeat:Connect(UpdateFavoriteInfo)
+    
+    -- Обработка respawn
+    targetPlayer.CharacterAdded:Connect(function(newCharacter)
+        wait(1) -- Ждем загрузки персонажа
+        if states.favoriteESP then
+            CreateFavoriteESP(targetPlayer)
+        end
+    end)
+end
+
+-- Функция для создания информации о фаворите
+function CreateFavoriteInfo()
+    if favoriteInfoLabel then
+        favoriteInfoLabel:Destroy()
+        favoriteInfoLabel = nil
+    end
+    
+    local screenGui = Instance.new("ScreenGui")
+    screenGui.Name = "FavoriteInfo"
+    screenGui.Parent = game:GetService("CoreGui")
+    
+    favoriteInfoLabel = Instance.new("TextLabel")
+    favoriteInfoLabel.Name = "FavoriteInfoLabel"
+    favoriteInfoLabel.Size = UDim2.new(0, 300, 0, 120)
+    favoriteInfoLabel.Position = UDim2.new(1, -310, 0, 10)
+    favoriteInfoLabel.AnchorPoint = Vector2.new(1, 0)
+    favoriteInfoLabel.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    favoriteInfoLabel.BackgroundTransparency = 0.5
+    favoriteInfoLabel.BorderSizePixel = 0
+    favoriteInfoLabel.Text = "⭐ FAVORITE: None"
+    favoriteInfoLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+    favoriteInfoLabel.TextSize = 14
+    favoriteInfoLabel.Font = Enum.Font.GothamBold
+    favoriteInfoLabel.TextXAlignment = Enum.TextXAlignment.Left
+    favoriteInfoLabel.TextYAlignment = Enum.TextYAlignment.Top
+    favoriteInfoLabel.TextWrapped = true
+    favoriteInfoLabel.Parent = screenGui
+    
+    return favoriteInfoLabel
+end
+
+-- Функция для переключения Favorite ESP
+function ToggleFavoriteESP(state)
+    states.favoriteESP = state
+    
+    if not state then
+        ClearFavoriteESP()
+        if favoriteInfoLabel then
+            favoriteInfoLabel.Text = "⭐ FAVORITE: None"
+        end
+        return
+    end
+    
+    if not FavoritePlayer or FavoritePlayer == "" then
+        return
+    end
+    
+    local targetPlayer = Players:FindFirstChild(FavoritePlayer)
+    
+    if not targetPlayer then
+        return
+    end
+    
+    if targetPlayer == player then
+        return
+    end
+    
+    -- Создаем информационную панель если ее нет
+    if not favoriteInfoLabel then
+        CreateFavoriteInfo()
+    end
+    
+    -- Удаляем обычный ESP с фаворита, если он был
+    if targetPlayer.Character then
+        RemoveESPByTarget(targetPlayer.Character)
+    end
+    
+    CreateFavoriteESP(targetPlayer)
+end
+
+-- Функция для очистки фаворита
+function ClearFavorite()
+    FavoritePlayer = nil
+    if states.favoriteESP then
+        ToggleFavoriteESP(false)
+    end
+    
+    if favoriteInfoLabel then
+        favoriteInfoLabel.Text = "⭐ FAVORITE: None"
+    end
+end
+
+-- Функция удаления ESP по цели
+function RemoveESPByTarget(target)
+    for i = #espObjects, 1, -1 do
+        local espData = espObjects[i]
+        if espData.Target == target then
+            pcall(function() 
+                if espData.Object then espData.Object:Destroy() end
+                if espData.Billboard then espData.Billboard:Destroy() end
+            end)
+            table.remove(espObjects, i)
+        end
+    end
+end
+
+-- Аимбот система с поддержкой исключений
 local Aimbot = {
     Enabled = false,
     TeamCheck = false,
@@ -100,9 +464,14 @@ local Aimbot = {
     ServiceConnections = {}
 }
 
--- Функции аимбота
+-- Функции аимбота с поддержкой исключений
 local function IsPlayerValidForAimbot(targetPlayer)
     if not targetPlayer or not targetPlayer.Character then return false end
+    
+    -- Проверка исключений
+    if IsPlayerExcludedFromAimbot(targetPlayer) then
+        return false
+    end
     
     local humanoid = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
     local lockPart = targetPlayer.Character:FindFirstChild(Aimbot.LockPart)
@@ -296,7 +665,7 @@ local function CleanupAimbot()
     Aimbot.Locked = nil
 end
 
--- Функции модификации (остаются без изменений)
+-- Функции модификации
 function GetHumanoid()
     local char = player.Character
     if char then
@@ -400,7 +769,7 @@ function ApplyFly()
     end
 end
 
--- ESP функции (остаются без изменений)
+-- ESP функции с улучшенной информацией
 function TogglePlayerESP(state)
     states.esp = state
     
@@ -413,56 +782,130 @@ function TogglePlayerESP(state)
     if state then
         for _, otherPlayer in pairs(Players:GetPlayers()) do
             if otherPlayer ~= player then
+                -- Проверяем, не является ли этот игрок фаворитом
+                if FavoritePlayer and otherPlayer.Name == FavoritePlayer and states.favoriteESP then
+                    continue -- Пропускаем фаворита, если включен Favorite ESP
+                end
+                
                 local function SetupESP(char)
                     if not char then return end
                     
+                    local teamColor = GetTeamColor(otherPlayer)
+                    local teamName = GetTeamName(otherPlayer)
+                    
                     local highlight = Instance.new("Highlight")
                     highlight.Name = GenerateUniqueName("PlayerHL")
-                    highlight.FillColor = Color3.fromRGB(255, 0, 0)
-                    highlight.OutlineColor = Color3.fromRGB(255, 0, 0)
+                    highlight.FillColor = teamColor
+                    highlight.OutlineColor = teamColor
                     highlight.FillTransparency = 0.5
                     highlight.Parent = char
                     
                     local billboard = Instance.new("BillboardGui")
                     billboard.Name = GenerateUniqueName("PlayerInfo")
-                    billboard.Size = UDim2.new(0, 200, 0, 60)
-                    billboard.StudsOffset = Vector3.new(0, 3.5, 0)
+                    billboard.Size = UDim2.new(0, 200, 0, 100)
+                    billboard.StudsOffset = Vector3.new(0, 4, 0)
                     billboard.AlwaysOnTop = true
                     billboard.Parent = char:FindFirstChild("Head") or char:WaitForChild("HumanoidRootPart")
                     
                     local nameLabel = Instance.new("TextLabel")
-                    nameLabel.Size = UDim2.new(1, 0, 0, 25)
+                    nameLabel.Size = UDim2.new(1, 0, 0, 20)
                     nameLabel.BackgroundTransparency = 1
                     nameLabel.Text = otherPlayer.Name
-                    nameLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+                    nameLabel.TextColor3 = teamColor
                     nameLabel.TextStrokeTransparency = 0
                     nameLabel.TextSize = 14
                     nameLabel.Font = Enum.Font.GothamBold
                     nameLabel.Parent = billboard
                     
+                    local teamLabel = Instance.new("TextLabel")
+                    teamLabel.Size = UDim2.new(1, 0, 0, 18)
+                    teamLabel.Position = UDim2.new(0, 0, 0, 20)
+                    teamLabel.BackgroundTransparency = 1
+                    teamLabel.Text = "Team: " .. teamName
+                    teamLabel.TextColor3 = teamColor
+                    teamLabel.TextStrokeTransparency = 0
+                    teamLabel.TextSize = 12
+                    teamLabel.Font = Enum.Font.Gotham
+                    teamLabel.Visible = espSettings.showTeam
+                    teamLabel.Parent = billboard
+                    
+                    local toolLabel = Instance.new("TextLabel")
+                    toolLabel.Size = UDim2.new(1, 0, 0, 18)
+                    toolLabel.Position = UDim2.new(0, 0, 0, 38)
+                    toolLabel.BackgroundTransparency = 1
+                    toolLabel.Text = "Tool: " .. GetToolInHand(otherPlayer)
+                    toolLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+                    toolLabel.TextStrokeTransparency = 0
+                    toolLabel.TextSize = 12
+                    toolLabel.Font = Enum.Font.Gotham
+                    toolLabel.Visible = espSettings.showTool
+                    toolLabel.Parent = billboard
+                    
                     local hpLabel = Instance.new("TextLabel")
-                    hpLabel.Size = UDim2.new(1, 0, 0, 25)
-                    hpLabel.Position = UDim2.new(0, 0, 0, 25)
+                    hpLabel.Size = UDim2.new(1, 0, 0, 18)
+                    hpLabel.Position = UDim2.new(0, 0, 0, 56)
                     hpLabel.BackgroundTransparency = 1
                     hpLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
                     hpLabel.TextStrokeTransparency = 0
                     hpLabel.TextSize = 12
                     hpLabel.Font = Enum.Font.Gotham
+                    hpLabel.Visible = espSettings.showHP
                     hpLabel.Parent = billboard
                     
-                    local humanoid = char:FindFirstChildOfClass("Humanoid")
-                    if humanoid then
-                        local function UpdateHP()
+                    local distanceLabel = Instance.new("TextLabel")
+                    distanceLabel.Size = UDim2.new(1, 0, 0, 18)
+                    distanceLabel.Position = UDim2.new(0, 0, 0, 74)
+                    distanceLabel.BackgroundTransparency = 1
+                    distanceLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+                    distanceLabel.TextStrokeTransparency = 0
+                    distanceLabel.TextSize = 11
+                    distanceLabel.Font = Enum.Font.Gotham
+                    distanceLabel.Visible = espSettings.showDistance
+                    distanceLabel.Parent = billboard
+                    
+                    local function UpdateESP()
+                        -- Обновление HP
+                        local humanoid = char:FindFirstChildOfClass("Humanoid")
+                        if humanoid then
                             hpLabel.Text = "HP: " .. math.floor(humanoid.Health) .. "/" .. math.floor(humanoid.MaxHealth)
                             hpLabel.TextColor3 = humanoid.Health / humanoid.MaxHealth > 0.5 and Color3.fromRGB(0, 255, 0) 
                                                 or humanoid.Health / humanoid.MaxHealth > 0.2 and Color3.fromRGB(255, 255, 0) 
                                                 or Color3.fromRGB(255, 0, 0)
                         end
                         
-                        UpdateHP()
-                        local hpConn = humanoid:GetPropertyChangedSignal("Health"):Connect(UpdateHP)
+                        -- Обновление предмета в руках
+                        toolLabel.Text = "Tool: " .. GetToolInHand(otherPlayer)
+                        
+                        -- Обновление расстояния
+                        local rootPart = char:FindFirstChild("HumanoidRootPart")
+                        if rootPart then
+                            distanceLabel.Text = "Distance: " .. GetDistanceFromPlayer(rootPart.Position) .. "m"
+                        end
+                        
+                        -- Обновление видимости элементов
+                        teamLabel.Visible = espSettings.showTeam
+                        toolLabel.Visible = espSettings.showTool
+                        hpLabel.Visible = espSettings.showHP
+                        distanceLabel.Visible = espSettings.showDistance
+                    end
+                    
+                    UpdateESP()
+                    
+                    -- Подключение обновлений
+                    local humanoid = char:FindFirstChildOfClass("Humanoid")
+                    if humanoid then
+                        local hpConn = humanoid:GetPropertyChangedSignal("Health"):Connect(UpdateESP)
                         table.insert(connections, hpConn)
                     end
+                    
+                    local toolConn = RunService.Heartbeat:Connect(function()
+                        if not states.esp then
+                            toolConn:Disconnect()
+                            return
+                        end
+                        UpdateESP()
+                    end)
+                    table.insert(connections, toolConn)
                     
                     table.insert(espObjects, highlight)
                     table.insert(espObjects, billboard)
@@ -547,7 +990,7 @@ function CreateItemESP(item, itemName)
     
     local billboard = Instance.new("BillboardGui")
     billboard.Name = GenerateUniqueName("ItemName")
-    billboard.Size = UDim2.new(0, 150, 0, 30)
+    billboard.Size = UDim2.new(0, 150, 0, 50)
     billboard.StudsOffset = Vector3.new(0, 3, 0)
     billboard.AlwaysOnTop = true
     
@@ -556,7 +999,7 @@ function CreateItemESP(item, itemName)
         billboard.Parent = primaryPart
         
         local nameLabel = Instance.new("TextLabel")
-        nameLabel.Size = UDim2.new(1, 0, 1, 0)
+        nameLabel.Size = UDim2.new(1, 0, 0, 25)
         nameLabel.BackgroundTransparency = 1
         nameLabel.Text = itemName
         nameLabel.TextColor3 = Color3.fromRGB(0, 255, 0)
@@ -564,6 +1007,28 @@ function CreateItemESP(item, itemName)
         nameLabel.TextSize = 11
         nameLabel.Font = Enum.Font.GothamBold
         nameLabel.Parent = billboard
+        
+        local distanceLabel = Instance.new("TextLabel")
+        distanceLabel.Size = UDim2.new(1, 0, 0, 25)
+        distanceLabel.Position = UDim2.new(0, 0, 0, 25)
+        distanceLabel.BackgroundTransparency = 1
+        distanceLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+        distanceLabel.TextStrokeTransparency = 0
+        distanceLabel.TextSize = 10
+        distanceLabel.Font = Enum.Font.Gotham
+        distanceLabel.Parent = billboard
+        
+        -- Обновление расстояния
+        local function UpdateDistance()
+            local rootPart = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if rootPart then
+                distanceLabel.Text = "Distance: " .. GetDistanceFromPlayer(primaryPart.Position) .. "m"
+            end
+        end
+        
+        UpdateDistance()
+        local distConn = RunService.Heartbeat:Connect(UpdateDistance)
+        table.insert(connections, distConn)
         
         table.insert(espObjects, billboard)
     end
@@ -629,7 +1094,7 @@ function CreateNPCESP(npc, npcName)
     
     local billboard = Instance.new("BillboardGui")
     billboard.Name = GenerateUniqueName("NPCName")
-    billboard.Size = UDim2.new(0, 150, 0, 30)
+    billboard.Size = UDim2.new(0, 150, 0, 50)
     billboard.StudsOffset = Vector3.new(0, 3, 0)
     billboard.AlwaysOnTop = true
     
@@ -638,7 +1103,7 @@ function CreateNPCESP(npc, npcName)
         billboard.Parent = primaryPart
         
         local nameLabel = Instance.new("TextLabel")
-        nameLabel.Size = UDim2.new(1, 0, 1, 0)
+        nameLabel.Size = UDim2.new(1, 0, 0, 25)
         nameLabel.BackgroundTransparency = 1
         nameLabel.Text = npcName
         nameLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
@@ -646,6 +1111,28 @@ function CreateNPCESP(npc, npcName)
         nameLabel.TextSize = 11
         nameLabel.Font = Enum.Font.GothamBold
         nameLabel.Parent = billboard
+        
+        local distanceLabel = Instance.new("TextLabel")
+        distanceLabel.Size = UDim2.new(1, 0, 0, 25)
+        distanceLabel.Position = UDim2.new(0, 0, 0, 25)
+        distanceLabel.BackgroundTransparency = 1
+        distanceLabel.TextColor3 = Color3.fromRGB(200, 200, 200)
+        distanceLabel.TextStrokeTransparency = 0
+        distanceLabel.TextSize = 10
+        distanceLabel.Font = Enum.Font.Gotham
+        distanceLabel.Parent = billboard
+        
+        -- Обновление расстояния
+        local function UpdateDistance()
+            local rootPart = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if rootPart then
+                distanceLabel.Text = "Distance: " .. GetDistanceFromPlayer(primaryPart.Position) .. "m"
+            end
+        end
+        
+        UpdateDistance()
+        local distConn = RunService.Heartbeat:Connect(UpdateDistance)
+        table.insert(connections, distConn)
         
         table.insert(espObjects, billboard)
     end
@@ -661,7 +1148,16 @@ function RemoveESPByType(espType)
     end
 end
 
--- Функции телепорта и Fling (остаются без изменений)
+-- Функция обновления всех ESP
+function UpdateAllESP()
+    if states.esp then
+        TogglePlayerESP(false)
+        wait(0.1)
+        TogglePlayerESP(true)
+    end
+end
+
+-- Функции телепорта и Fling
 function TeleportToRandomItem()
     local items = {}
     
@@ -1005,6 +1501,8 @@ function CreateVenyxGUI()
     -- Вкладка Visuals
     local visualsPage = Venyx:addPage("Visuals", 5012544693)
     local espSection = visualsPage:addSection("ESP Settings")
+    local espComponentsSection = visualsPage:addSection("ESP Components")
+    local favoriteSection = visualsPage:addSection("Favorite Player")
     
     espSection:addToggle("Player ESP", states.esp, function(value)
         TogglePlayerESP(value)
@@ -1018,13 +1516,50 @@ function CreateVenyxGUI()
         ToggleNPCESP(value)
     end)
     
-    -- Вкладка Aimbot
-    local aimbotPage = Venyx:addPage("Aimbot", 5012544693)
-    local aimbotMainSection = aimbotPage:addSection("Aimbot Main")
-    local aimbotSettingsSection = aimbotPage:addSection("Aimbot Settings")
-    local aimbotFOVSection = aimbotPage:addSection("FOV Settings")
+    -- Настройки компонентов ESP
+    espComponentsSection:addToggle("Show HP", espSettings.showHP, function(value)
+        espSettings.showHP = value
+        UpdateAllESP()
+    end)
     
-    aimbotMainSection:addToggle("Aimbot Enabled", Aimbot.Enabled, function(value)
+    espComponentsSection:addToggle("Show Team", espSettings.showTeam, function(value)
+        espSettings.showTeam = value
+        UpdateAllESP()
+    end)
+    
+    espComponentsSection:addToggle("Show Tool", espSettings.showTool, function(value)
+        espSettings.showTool = value
+        UpdateAllESP()
+    end)
+    
+    espComponentsSection:addToggle("Show Distance", espSettings.showDistance, function(value)
+        espSettings.showDistance = value
+        UpdateAllESP()
+    end)
+    
+    -- Система фаворита
+    favoriteSection:addTextbox("Favorite Player", "Enter name", function(value)
+        FavoritePlayer = value
+        if value and value ~= "" then
+            Venyx:Notify("Favorite Set", "Now tracking: " .. value)
+        end
+    end)
+    
+    favoriteSection:addToggle("Favorite ESP", states.favoriteESP, function(value)
+        ToggleFavoriteESP(value)
+    end)
+    
+    favoriteSection:addButton("Clear Favorite", function()
+        ClearFavorite()
+        Venyx:Notify("Favorite Cleared", "Favorite player removed")
+    end)
+    
+    -- Вкладка Aimbot с ВСЕМИ настройками в одной секции
+    local aimbotPage = Venyx:addPage("Aimbot", 5012544693)
+    local aimbotSection = aimbotPage:addSection("Aimbot Settings")
+    
+    -- Основные настройки аимбота
+    aimbotSection:addToggle("Aimbot Enabled", Aimbot.Enabled, function(value)
         Aimbot.Enabled = value
         if value then
             InitializeAimbot()
@@ -1033,46 +1568,106 @@ function CreateVenyxGUI()
         end
     end)
     
-    aimbotMainSection:addToggle("Toggle Mode", Aimbot.Toggle, function(value)
+    aimbotSection:addToggle("Toggle Mode", Aimbot.Toggle, function(value)
         Aimbot.Toggle = value
     end)
     
-    aimbotSettingsSection:addDropdown("Lock Part", {"Head", "HumanoidRootPart", "Torso"}, function(value)
+    aimbotSection:addDropdown("Lock Part", {"Head", "HumanoidRootPart", "Torso"}, function(value)
         Aimbot.LockPart = value
     end)
     
-    aimbotSettingsSection:addToggle("Team Check", Aimbot.TeamCheck, function(value)
+    aimbotSection:addToggle("Team Check", Aimbot.TeamCheck, function(value)
         Aimbot.TeamCheck = value
     end)
     
-    aimbotSettingsSection:addToggle("Wall Check", Aimbot.WallCheck, function(value)
+    aimbotSection:addToggle("Wall Check", Aimbot.WallCheck, function(value)
         Aimbot.WallCheck = value
     end)
     
-    aimbotSettingsSection:addSlider("Smoothness", Aimbot.Smoothness * 100, 0, 100, function(value)
+    aimbotSection:addSlider("Smoothness", Aimbot.Smoothness * 100, 0, 100, function(value)
         Aimbot.Smoothness = value / 100
     end)
     
-    aimbotSettingsSection:addSlider("Prediction", Aimbot.Prediction * 100, 0, 200, function(value)
+    aimbotSection:addSlider("Prediction", Aimbot.Prediction * 100, 0, 200, function(value)
         Aimbot.Prediction = value / 100
     end)
     
-    aimbotSettingsSection:addSlider("Max Distance", Aimbot.MaxDistance, 100, 2000, function(value)
+    aimbotSection:addSlider("Max Distance", Aimbot.MaxDistance, 100, 2000, function(value)
         Aimbot.MaxDistance = value
     end)
     
-    aimbotFOVSection:addToggle("FOV Circle", Aimbot.FOVVisible, function(value)
+    -- Настройки FOV
+    aimbotSection:addToggle("FOV Circle", Aimbot.FOVVisible, function(value)
         Aimbot.FOVVisible = value
     end)
     
-    aimbotFOVSection:addSlider("FOV Size", Aimbot.FOV, 50, 500, function(value)
+    aimbotSection:addSlider("FOV Size", Aimbot.FOV, 50, 500, function(value)
         Aimbot.FOV = value
     end)
     
-    aimbotFOVSection:addKeybind("Aimbot Key", Enum.KeyCode[Aimbot.TriggerKey], function()
+    aimbotSection:addKeybind("Aimbot Key", Enum.KeyCode[Aimbot.TriggerKey], function()
         -- Keybind для быстрого переключения
     end, function(key)
         Aimbot.TriggerKey = tostring(key):gsub("Enum.KeyCode.", "")
+    end)
+    
+    -- НАСТРОЙКИ ИСКЛЮЧЕНИЙ
+    aimbotSection:addToggle("Exclude Friends", AimbotExceptions.Friends, function(value)
+        AimbotExceptions.Friends = value
+        Venyx:Notify("Aimbot", "Friends exclusion: " .. (value and "ON" or "OFF"))
+    end)
+    
+    aimbotSection:addButton("Add Player Exception", function()
+        -- Простой способ добавления игрока
+        local playerName = "ExamplePlayer" -- Можно заменить на логику ввода
+        if playerName and playerName ~= "" then
+            AddPlayerToAimbotExceptions(playerName)
+            Venyx:Notify("Aimbot", "Added player: " .. playerName)
+        end
+    end)
+    
+    aimbotSection:addButton("Add Team Exception", function()
+        -- Простой способ добавления команды
+        local teamName = "ExampleTeam" -- Можно заменить на логику ввода
+        if teamName and teamName ~= "" then
+            AddTeamToAimbotExceptions(teamName)
+            Venyx:Notify("Aimbot", "Added team: " .. teamName)
+        end
+    end)
+    
+    aimbotSection:addButton("View Exceptions", function()
+        local excludedPlayers = GetExcludedPlayersList()
+        local excludedTeams = GetExcludedTeamsList()
+        
+        local message = "Aimbot Exceptions:\n\n"
+        
+        if #excludedPlayers > 0 then
+            message = message .. "Players:\n"
+            for _, playerName in ipairs(excludedPlayers) do
+                message = message .. "• " .. playerName .. "\n"
+            end
+            message = message .. "\n"
+        else
+            message = message .. "Players: None\n\n"
+        end
+        
+        if #excludedTeams > 0 then
+            message = message .. "Teams:\n"
+            for _, teamName in ipairs(excludedTeams) do
+                message = message .. "• " .. teamName .. "\n"
+            end
+        else
+            message = message .. "Teams: None"
+        end
+        
+        message = message .. "\nFriends: " .. (AimbotExceptions.Friends and "Excluded" or "Not excluded")
+        
+        Venyx:Notify("Aimbot Exceptions", message)
+    end)
+    
+    aimbotSection:addButton("Clear All Exceptions", function()
+        ClearAllAimbotExceptions()
+        Venyx:Notify("Aimbot", "All exceptions cleared!")
     end)
     
     -- Вкладка Teleport
@@ -1107,7 +1702,7 @@ function CreateVenyxGUI()
     creditsSection:addLabel("👑 Developer: danartkul")
     creditsSection:addLabel("🎮 Game: CURSED CHILD Jump Showdown")
     creditsSection:addLabel("⚡ Version: Venyx UI Edition")
-    creditsSection:addLabel("🎯 Feature: Advanced Aimbot")
+    creditsSection:addLabel("🎯 Feature: Advanced Aimbot & Favorite System")
     
     infoSection:addLabel("🌟 Special thanks to all testers!")
     infoSection:addLabel("🔐 Protected with key system")
@@ -1125,7 +1720,6 @@ function CreateVenyxGUI()
     end, function() end)
     
     configSection:addButton("Save Configuration", function()
-        -- Можно добавить сохранение настроек
         Venyx:Notify("Settings Saved", "Your configuration has been saved!")
     end)
     
@@ -1136,9 +1730,12 @@ function CreateVenyxGUI()
     -- Загружаем GUI
     Venyx:SelectPage(1)
     
+    -- Создаем панель фаворита
+    CreateFavoriteInfo()
+    
     -- Уведомление о успешной загрузке
     wait(1)
-    Venyx:Notify("Menu Loaded", "CURSED CHILD Venyx UI with Aimbot successfully loaded!")
+    Venyx:Notify("Menu Loaded", "CURSED CHILD Venyx UI with Aimbot & Favorite System successfully loaded!")
     
     return Venyx
 end
@@ -1162,6 +1759,12 @@ local respawnConnection = player.CharacterAdded:Connect(function()
     if states.itemEsp then ToggleItemESP(true) end
     if states.npcEsp then ToggleNPCESP(true) end
     if states.fling then ToggleFling(true) end
+    if states.favoriteESP and FavoritePlayer then
+        local targetPlayer = Players:FindFirstChild(FavoritePlayer)
+        if targetPlayer then
+            CreateFavoriteESP(targetPlayer)
+        end
+    end
     if Aimbot.Enabled then
         CleanupAimbot()
         wait(0.5)
@@ -1178,6 +1781,8 @@ if keyGUI then
     print("🔐 Venyx UI Key System Loaded")
     print("👑 Developer: danartkul")
     print("🎨 Using Venyx UI Library")
-    print("🎯 Advanced Aimbot Included")
+    print("🎯 Advanced Aimbot with Exclusions")
+    print("⭐ Favorite System with Team Display")
+    print("📊 Enhanced ESP with Team Colors & Tools")
     print("⚡ Waiting for key input...")
 end
