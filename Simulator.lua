@@ -4,6 +4,7 @@ local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 local Farm = false
 local Rebirth = false
 local ESPEnabled = false
+local IsSelling = false -- Флаг процесса продажи
 
 -- Функция для автоопределения инструмента
 local function AutoDetectTool()
@@ -128,31 +129,72 @@ end
 
 local Character = game.Workspace:WaitForChild(game.Players.LocalPlayer.Name)
 
+-- Функция проверки завершения продажи
+local function WaitForSellCompletion()
+    local startTime = tick()
+    local maxWaitTime = 10 -- Максимальное время ожидания 10 секунд
+    
+    while IsSelling do
+        -- Проверяем видимость попапа продажи
+        local sellPopup = game.Players.LocalPlayer.PlayerGui.Gui.Popups:FindFirstChild("SellingItems")
+        local backpackFull = game.Players[game.Players.LocalPlayer.Name].PlayerGui.Gui.Popups.BackpackFull.Visible
+        
+        -- Если попап продажи исчез и инвентарь не полный, значит продажа завершена
+        if not sellPopup and not backpackFull then
+            IsSelling = false
+            break
+        end
+        
+        -- Защита от бесконечного цикла
+        if tick() - startTime > maxWaitTime then
+            warn("Sell timeout reached")
+            IsSelling = false
+            break
+        end
+        
+        task.wait(0.5)
+    end
+end
+
 function Sell()
-	local OldPos = Character.HumanoidRootPart.CFrame
-	Character.HumanoidRootPart.CFrame = CFrame.new(3, 10, -160)
-	game.ReplicatedStorage.Events.AreaSell:FireServer()
-	wait(0.1)
-	Character.HumanoidRootPart.CFrame = OldPos
+    if IsSelling then
+        print("Already selling, please wait...")
+        return
+    end
+    
+    IsSelling = true
+    local OldPos = Character.HumanoidRootPart.CFrame
+    
+    -- Телепортируемся к точке продажи
+    Character.HumanoidRootPart.CFrame = CFrame.new(3, 10, -160)
+    
+    -- Запускаем продажу
+    game.ReplicatedStorage.Events.AreaSell:FireServer()
+    
+    -- Ждем завершения продажи
+    WaitForSellCompletion()
+    
+    -- Возвращаемся обратно
+    Character.HumanoidRootPart.CFrame = OldPos
 end
 
 local function RE()
-	while true do
-		wait(1)
-		if Rebirth == true then
-			local a = game.Players.LocalPlayer.PlayerGui.Gui.Buttons.Coins.Amount.Text:gsub(',','')
-			local b = game.Players.LocalPlayer.PlayerGui.Gui.Rebirth.Needed.Coins.Amount.Text:gsub(',','')
-			print(tonumber(a))
-			print(tonumber(b))
-			if tonumber(a) > tonumber(b) then 
-				warn('Calculation Complete!')
-				game.ReplicatedStorage.Events.Rebirth:FireServer()
-				repeat wait(.1) until game.Players.LocalPlayer.PlayerGui.Gui.Popups.GiveReward.Visible == true
-				game.Players.LocalPlayer.PlayerGui.Gui.Popups.GiveReward.Visible = false
-				wait()
-			end
-		end
-	end
+    while true do
+        wait(1)
+        if Rebirth == true then
+            local a = game.Players.LocalPlayer.PlayerGui.Gui.Buttons.Coins.Amount.Text:gsub(',','')
+            local b = game.Players.LocalPlayer.PlayerGui.Gui.Rebirth.Needed.Coins.Amount.Text:gsub(',','')
+            print(tonumber(a))
+            print(tonumber(b))
+            if tonumber(a) > tonumber(b) then 
+                warn('Calculation Complete!')
+                game.ReplicatedStorage.Events.Rebirth:FireServer()
+                repeat wait(.1) until game.Players.LocalPlayer.PlayerGui.Gui.Popups.GiveReward.Visible == true
+                game.Players.LocalPlayer.PlayerGui.Gui.Popups.GiveReward.Visible = false
+                wait()
+            end
+        end
+    end
 end
 
 spawn(RE)
@@ -278,17 +320,40 @@ local InfoLabel = MainTab:CreateLabel("Auto Detect Tool: Automatically finds dig
 local InfoLabel2 = MainTab:CreateLabel("Auto Farm: Automatically digs chests in optimal area")
 local InfoLabel3 = MainTab:CreateLabel("Chest ESP: Highlights all chests on the map")
 
--- Запускаем основной фарминг цикл
+-- Система автоопределения инструмента каждые 5 секунд при фарме
+local function AutoToolDetectionLoop()
+    while true do
+        wait(5)
+        if Farm then
+            local currentTool = ToolNameInput.CurrentValue
+            local detectedTool = AutoDetectTool()
+            
+            -- Если найден новый инструмент, обновляем
+            if detectedTool ~= currentTool then
+                ToolNameInput:Set(detectedTool)
+                print("Auto-detected new tool: " .. detectedTool)
+                
+                -- Переодеваем инструмент если нужно
+                if not game.Players.LocalPlayer.Character:FindFirstChild(detectedTool) then
+                    game.Players.LocalPlayer.Character.Humanoid:EquipTool(game.Players.LocalPlayer.Backpack[detectedTool])
+                end
+            end
+        end
+    end
+end
+
+spawn(AutoToolDetectionLoop)
+
+-- Улучшенный фарминг цикл с проверкой продажи
 spawn(function()
     while true do
-        wait()
-        if Farm then
+        task.wait()
+        if Farm and not IsSelling then -- Не фармим во время продажи
             local foundChest = nil
             
             -- Поиск ближайшего сундука с учетом ESP
-            for i,v in pairs(game.Workspace.SandBlocks:GetChildren()) do
-                if not Farm then 
-                    Sell()
+            for i, v in pairs(game.Workspace.SandBlocks:GetChildren()) do
+                if not Farm or IsSelling then 
                     break 
                 end
                 
@@ -301,44 +366,88 @@ spawn(function()
                 end
             end
             
-            if foundChest then
-                local Success,Problem = pcall(function()
+            if foundChest and not IsSelling then
+                local Success, Problem = pcall(function()
+                    -- Проверяем полный инвентарь
                     if game.Players[game.Players.LocalPlayer.Name].PlayerGui.Gui.Popups.BackpackFull.Visible == true then 
                         Sell() 
+                        -- Ждем завершения продажи перед продолжением
+                        while IsSelling do
+                            task.wait(0.1)
+                        end
                     end
                     
                     foundChest.CanCollide = false
                     local Coins = game.Players.LocalPlayer.PlayerGui.Gui.Buttons.Coins.Amount.Text
                     local chestName = foundChest.Name
+                    local toolName = ToolNameInput.CurrentValue
+                    
+                    -- Проверяем наличие инструмента
+                    if not game.Players.LocalPlayer.Character:FindFirstChild(toolName) then
+                        game.Players.LocalPlayer.Character.Humanoid:EquipTool(game.Players.LocalPlayer.Backpack[toolName])
+                        task.wait(0.5)
+                    end
                     
                     repeat
+                        if not Farm or IsSelling then break end
+                        
+                        -- Проверяем полный инвентарь в цикле
                         if game.Players[game.Players.LocalPlayer.Name].PlayerGui.Gui.Popups.BackpackFull.Visible == true then 
                             Sell() 
-                        end
-                        if not Farm then 
-                            wait(.1)
-                            Character.HumanoidRootPart.CFrame = CFrame.new(3, 10, -160)
-                            wait(1)
-                            break 
+                            -- Ждем завершения продажи перед продолжением
+                            while IsSelling do
+                                task.wait(0.1)
+                            end
+                            break -- Выходим из цикла копания после продажи
                         end
                         
-                        Character.HumanoidRootPart.Anchored = true
-                        wait()
-                        Character.HumanoidRootPart.CFrame = foundChest.CFrame
-                        wait()
-                        Character.HumanoidRootPart.Anchored = false
-                        local toolName = ToolNameInput.CurrentValue
-                        Character:WaitForChild(toolName)['RemoteClick']:FireServer(game.Workspace.SandBlocks[chestName])
-                        wait()
-                    until game.Players.LocalPlayer.PlayerGui.Gui.Buttons.Coins.Amount.Text ~= Coins
+                        -- Телепортация к сундуку с улучшенной стабильностью
+                        local humanoidRootPart = Character:FindFirstChild("HumanoidRootPart")
+                        if humanoidRootPart then
+                            humanoidRootPart.Anchored = true
+                            task.wait()
+                            humanoidRootPart.CFrame = foundChest.CFrame + Vector3.new(0, 3, 0) -- Немного выше для избежания багов
+                            task.wait()
+                            humanoidRootPart.Anchored = false
+                        end
+                        
+                        -- Использование инструмента
+                        local tool = Character:FindFirstChild(toolName)
+                        if tool and tool:FindFirstChild("RemoteClick") then
+                            tool['RemoteClick']:FireServer(game.Workspace.SandBlocks[chestName])
+                        else
+                            -- Если инструмент не найден, пытаемся переодеть
+                            game.Players.LocalPlayer.Character.Humanoid:EquipTool(game.Players.LocalPlayer.Backpack[toolName])
+                            task.wait(0.5)
+                        end
+                        
+                        task.wait(0.1) -- Небольшая задержка между действиями
+                        
+                    until not Farm or IsSelling or not foundChest or not foundChest.Parent or 
+                          game.Players.LocalPlayer.PlayerGui.Gui.Buttons.Coins.Amount.Text ~= Coins
                     
                 end)
                 
                 if not Success then
-                    warn("Farm Error: " .. Problem)
+                    warn("Farm Error: " .. tostring(Problem))
+                    task.wait(1) -- Задержка при ошибке
                 end
             else
-                wait(1) -- Ждем если сундуков нет
+                task.wait(1) -- Ждем если сундуков нет или идет продажа
+            end
+        end
+    end
+end)
+
+-- Мониторим состояние продажи
+spawn(function()
+    while true do
+        task.wait(0.5)
+        -- Дополнительная проверка: если инвентарь снова стал полным сразу после продажи
+        if IsSelling and not game.Players[game.Players.LocalPlayer.Name].PlayerGui.Gui.Popups.BackpackFull.Visible then
+            local sellPopup = game.Players.LocalPlayer.PlayerGui.Gui.Popups:FindFirstChild("SellingItems")
+            if not sellPopup then
+                IsSelling = false
             end
         end
     end
