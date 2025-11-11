@@ -5,6 +5,7 @@ local Farm = false
 local Rebirth = false
 local ESPEnabled = false
 local IsSelling = false -- Флаг процесса продажи
+local AutoSell = false -- Флаг авто-продажи
 
 -- AFK Protection System
 local AFKProtection = {
@@ -233,6 +234,19 @@ function Sell()
     Character.HumanoidRootPart.CFrame = OldPos
 end
 
+-- Функция телепортации
+local function TeleportTo(position)
+    if Character and Character:FindFirstChild("HumanoidRootPart") then
+        Character.HumanoidRootPart.CFrame = CFrame.new(position)
+        Rayfield:Notify({
+            Title = "Teleport Success",
+            Content = "Teleported to coordinates",
+            Duration = 3,
+            Image = 4483362458,
+        })
+    end
+end
+
 local function RE()
     while true do
         wait(1)
@@ -343,6 +357,31 @@ local AutoRebirthToggle = MainTab:CreateToggle({
    end,
 })
 
+-- Auto Sell Toggle
+local AutoSellToggle = MainTab:CreateToggle({
+   Name = "Auto Sell",
+   CurrentValue = false,
+   Flag = "AutoSellToggle",
+   Callback = function(Value)
+       AutoSell = Value
+       if Value then
+           Rayfield:Notify({
+              Title = "Auto Sell Enabled",
+              Content = "Will auto-sell when inventory full",
+              Duration = 3,
+              Image = 4483362458,
+           })
+       else
+           Rayfield:Notify({
+              Title = "Auto Sell Disabled",
+              Content = "Auto selling turned off",
+              Duration = 3,
+              Image = 4483362458,
+           })
+       end
+   end,
+})
+
 -- ESP секция
 local ESPToggle = MainTab:CreateToggle({
    Name = "Chest ESP",
@@ -406,6 +445,36 @@ local InfoLabel = MainTab:CreateLabel("Auto Detect Tool: Automatically finds dig
 local InfoLabel2 = MainTab:CreateLabel("Auto Farm: Automatically digs chests in optimal area")
 local InfoLabel3 = MainTab:CreateLabel("Chest ESP: Highlights all chests on the map")
 local InfoLabel4 = MainTab:CreateLabel("Anti-AFK: Prevents kick using VirtualUser")
+local InfoLabel5 = MainTab:CreateLabel("Auto Sell: Auto sells when inventory full")
+
+-- Вкладка телепортов
+local TeleportTab = Window:CreateTab("Teleport", 4483362458)
+
+-- Секция телепортов
+local TeleportSection = TeleportTab:CreateSection("Locations Teleport")
+
+-- Телепорт на Марс
+local MarsButton = TeleportTab:CreateButton({
+   Name = "Teleport to Mars",
+   Callback = function()
+       TeleportTo(Vector3.new(-1429.20, 10.31, -801.40))
+   end,
+})
+
+-- Телепорт на Вулкан
+local VolcanoButton = TeleportTab:CreateButton({
+   Name = "Teleport to Volcano",
+   Callback = function()
+       TeleportTo(Vector3.new(2150.34, 9.95, -245.75))
+   end,
+})
+
+-- Информация о телепортах
+local TeleportInfoSection = TeleportTab:CreateSection("Teleport Information")
+
+local TeleportInfo1 = TeleportTab:CreateLabel("Mars: Best for rare treasures")
+local TeleportInfo2 = TeleportTab:CreateLabel("Volcano: High-value items area")
+local TeleportInfo3 = TeleportTab:CreateLabel("Use Auto Farm after teleporting")
 
 -- Система автоопределения инструмента каждые 5 секунд при фарме
 local function AutoToolDetectionLoop()
@@ -431,6 +500,39 @@ end
 
 spawn(AutoToolDetectionLoop)
 
+-- Система авто-продажи
+local function AutoSellLoop()
+    while true do
+        task.wait(1) -- Проверяем каждую секунду
+        
+        if AutoSell and not IsSelling then
+            -- Проверяем полный инвентарь
+            if game.Players[game.Players.LocalPlayer.Name].PlayerGui.Gui.Popups.BackpackFull.Visible == true then
+                print("Auto Sell: Inventory full, starting sell process...")
+                
+                -- Сохраняем текущую позицию
+                local currentPosition = Character.HumanoidRootPart.CFrame
+                
+                -- Запускаем продажу
+                Sell()
+                
+                -- Ждем завершения продажи
+                while IsSelling do
+                    task.wait(0.1)
+                end
+                
+                -- Возвращаемся на исходную позицию
+                task.wait(0.5)
+                Character.HumanoidRootPart.CFrame = currentPosition
+                
+                print("Auto Sell: Completed, returned to original position")
+            end
+        end
+    end
+end
+
+spawn(AutoSellLoop)
+
 -- Улучшенный фарминг цикл с проверкой продажи
 spawn(function()
     while true do
@@ -455,8 +557,8 @@ spawn(function()
             
             if foundChest and not IsSelling then
                 local Success, Problem = pcall(function()
-                    -- Проверяем полный инвентарь
-                    if game.Players[game.Players.LocalPlayer.Name].PlayerGui.Gui.Popups.BackpackFull.Visible == true then 
+                    -- Проверяем полный инвентарь (если авто-продажа выключена)
+                    if not AutoSell and game.Players[game.Players.LocalPlayer.Name].PlayerGui.Gui.Popups.BackpackFull.Visible == true then 
                         Sell() 
                         -- Ждем завершения продажи перед продолжением
                         while IsSelling do
@@ -478,8 +580,8 @@ spawn(function()
                     repeat
                         if not Farm or IsSelling then break end
                         
-                        -- Проверяем полный инвентарь в цикле
-                        if game.Players[game.Players.LocalPlayer.Name].PlayerGui.Gui.Popups.BackpackFull.Visible == true then 
+                        -- Проверяем полный инвентарь в цикле (если авто-продажа выключена)
+                        if not AutoSell and game.Players[game.Players.LocalPlayer.Name].PlayerGui.Gui.Popups.BackpackFull.Visible == true then 
                             Sell() 
                             -- Ждем завершения продажи перед продолжением
                             while IsSelling do
