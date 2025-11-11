@@ -221,8 +221,8 @@ function Sell()
     IsSelling = true
     local OldPos = Character.HumanoidRootPart.CFrame
     
-    -- Телепортируемся к точке продажи
-    Character.HumanoidRootPart.CFrame = CFrame.new(3, 10, -160)
+    -- Телепортируемся к новой точке продажи
+    Character.HumanoidRootPart.CFrame = CFrame.new(117.19, 10.30, -517.18)
     
     -- Запускаем продажу
     game.ReplicatedStorage.Events.AreaSell:FireServer()
@@ -469,12 +469,21 @@ local VolcanoButton = TeleportTab:CreateButton({
    end,
 })
 
+-- Телепорт на точку продажи
+local SellPointButton = TeleportTab:CreateButton({
+   Name = "Teleport to Sell Point",
+   Callback = function()
+       TeleportTo(Vector3.new(117.19, 10.30, -517.18))
+   end,
+})
+
 -- Информация о телепортах
 local TeleportInfoSection = TeleportTab:CreateSection("Teleport Information")
 
 local TeleportInfo1 = TeleportTab:CreateLabel("Mars: Best for rare treasures")
 local TeleportInfo2 = TeleportTab:CreateLabel("Volcano: High-value items area")
-local TeleportInfo3 = TeleportTab:CreateLabel("Use Auto Farm after teleporting")
+local TeleportInfo3 = TeleportTab:CreateLabel("Sell Point: New selling location")
+local TeleportInfo4 = TeleportTab:CreateLabel("Use Auto Farm after teleporting")
 
 -- Система автоопределения инструмента каждые 5 секунд при фарме
 local function AutoToolDetectionLoop()
