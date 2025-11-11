@@ -6,6 +6,61 @@ local Rebirth = false
 local ESPEnabled = false
 local IsSelling = false -- Флаг процесса продажи
 
+-- AFK Protection System
+local AFKProtection = {
+    Enabled = false,
+    Timer = 0,
+    Connection = nil
+}
+
+local function EnableAFKProtection()
+    if AFKProtection.Connection then
+        AFKProtection.Connection:Disconnect()
+    end
+    
+    AFKProtection.Enabled = true
+    AFKProtection.Timer = 0
+    
+    AFKProtection.Connection = game:GetService("RunService").Heartbeat:Connect(function(deltaTime)
+        if not AFKProtection.Enabled then return end
+        
+        AFKProtection.Timer = AFKProtection.Timer + deltaTime
+        
+        -- Каждые 10 минут имитируем активность
+        if AFKProtection.Timer >= 600 then
+            AFKProtection.Timer = 0
+            
+            pcall(function()
+                -- Используем VirtualUser для имитации активности (самый надежный способ)
+                game:GetService("VirtualUser"):Button2Down(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+                task.wait(0.1)
+                game:GetService("VirtualUser"):Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+                
+                -- Дополнительно: легкое движение камеры
+                local cam = workspace.CurrentCamera
+                if cam then
+                    cam.CFrame = cam.CFrame * CFrame.Angles(0, math.rad(5), 0)
+                    task.wait(0.1)
+                    cam.CFrame = cam.CFrame * CFrame.Angles(0, math.rad(-5), 0)
+                end
+                
+                print("Anti-AFK: Activity simulated at " .. os.date("%X"))
+            end)
+        end
+    end)
+    
+    print("Anti-AFK Protection Enabled - VirtualUser activity every 10 minutes")
+end
+
+local function DisableAFKProtection()
+    AFKProtection.Enabled = false
+    if AFKProtection.Connection then
+        AFKProtection.Connection:Disconnect()
+        AFKProtection.Connection = nil
+    end
+    print("Anti-AFK Protection Disabled")
+end
+
 -- Функция для автоопределения инструмента
 local function AutoDetectTool()
     local backpack = game.Players.LocalPlayer.Backpack
@@ -313,12 +368,44 @@ local SellButton = MainTab:CreateButton({
    end,
 })
 
+-- AFK Protection Section
+local AFKSection = MainTab:CreateSection("AFK Protection")
+
+local AFKInfo = MainTab:CreateLabel("Prevents kick for inactivity")
+local AFKInfo2 = MainTab:CreateLabel("Uses VirtualUser every 10 minutes")
+
+local AFKToggle = MainTab:CreateToggle({
+   Name = "Enable Anti-AFK",
+   CurrentValue = false,
+   Flag = "AntiAFK",
+   Callback = function(Value)
+       if Value then
+           EnableAFKProtection()
+           Rayfield:Notify({
+              Title = "Anti-AFK Enabled",
+              Content = "VirtualUser will prevent AFK kicks",
+              Duration = 3,
+              Image = 4483362458,
+           })
+       else
+           DisableAFKProtection()
+           Rayfield:Notify({
+              Title = "Anti-AFK Disabled",
+              Content = "AFK protection turned off",
+              Duration = 3,
+              Image = 4483362458,
+           })
+       end
+   end,
+})
+
 -- Информационная секция
 local InfoSection = MainTab:CreateSection("Information")
 
 local InfoLabel = MainTab:CreateLabel("Auto Detect Tool: Automatically finds digging tools")
 local InfoLabel2 = MainTab:CreateLabel("Auto Farm: Automatically digs chests in optimal area")
 local InfoLabel3 = MainTab:CreateLabel("Chest ESP: Highlights all chests on the map")
+local InfoLabel4 = MainTab:CreateLabel("Anti-AFK: Prevents kick using VirtualUser")
 
 -- Система автоопределения инструмента каждые 5 секунд при фарме
 local function AutoToolDetectionLoop()
