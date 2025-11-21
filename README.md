@@ -7,3 +7,6 @@ Treasure Hunt Simulator =
 loadstring(game:HttpGet("https://raw.githubusercontent.com/danartkul/CursedChildScript/main/Simulator.lua"))()
 
 key TreasureBreak2024
+
+universal cool script =
+https://github.com/danartkul/CursedChildScript/blob/main/universal%20cool%20script.lua
